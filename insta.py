@@ -1,4 +1,4 @@
-# ultimate_hunter.py - v5.2 (Fast Heartbeat for 50s Idle Time)
+# ultimate_hunter.py - v5.3 (Complete Country List)
 
 import requests
 from bs4 import BeautifulSoup
@@ -25,10 +25,20 @@ ADMIN_USER_ID = 1148797883 # ⚠️ استبدل بالـ ID الخاص بك
 
 # --- قاعدة بيانات الدول (مع رمز الدولة وطول الرقم الصحيح) ---
 SUPPORTED_COUNTRIES = {
-    "🇸🇦 KSA": ("966", 9), "🇦🇪 UAE": ("971", 9), "🇪🇬 Egypt": ("20", 10),
-    "🇮🇶 Iraq": ("964", 10), "🇯🇴 Jordan": ("962", 9), "🇰🇼 Kuwait": ("965", 8),
-    "🇶🇦 Qatar": ("974", 8), "🇩🇪 Germany": ("49", 10), "🇫🇷 France": ("33", 9),
-    "🇺🇸 USA": ("1", 10), "🇬🇧 UK": ("44", 10), "🇹🇷 Turkey": ("90", 10),
+    "🇸🇦 KSA": ("966", 9),
+    "🇦🇪 UAE": ("971", 9),
+    "🇪🇬 Egypt": ("20", 10),
+    "🇮🇶 Iraq": ("964", 10),
+    "🇯🇴 Jordan": ("962", 9),
+    "🇰🇼 Kuwait": ("965", 8),
+    "🇶🇦 Qatar": ("974", 8),
+    "🇮🇷 Iran": ("98", 10),   # تمت الإضافة
+    "🇱🇾 Libya": ("218", 9),  # تمت الإضافة
+    "🇩🇪 Germany": ("49", 10),
+    "🇫🇷 France": ("33", 9),
+    "🇺🇸 USA": ("1", 10),
+    "🇬🇧 UK": ("44", 10),
+    "🇹🇷 Turkey": ("90", 10),
 }
 
 HITS_FILE = "hits.txt"
@@ -48,7 +58,6 @@ proxy_inventory = queue.Queue()
 # ==============================================================================
 
 def _start_heartbeat_server():
-    """Starts a simple HTTP server in a background thread to respond to pings."""
     PORT = int(os.environ.get("PORT", 10000))
     Handler = http.server.SimpleHTTPRequestHandler
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
@@ -56,15 +65,12 @@ def _start_heartbeat_server():
         httpd.serve_forever()
 
 async def _heartbeat_pinger():
-    """Periodically pings its own service URL to keep it awake."""
     service_url = os.getenv("RENDER_EXTERNAL_URL")
     if not service_url:
         print("Heartbeat Pinger: RENDER_EXTERNAL_URL not found. Pinger disabled.")
         return
-
     while True:
-        # *** التعديل الحاسم هنا ***
-        await asyncio.sleep(40) # نائم لمدة 40 ثانية (أقل من فترة الخمول 50 ثانية)
+        await asyncio.sleep(40)
         try:
             print("Heartbeat Pinger: Sending self-ping to stay awake...")
             requests.get(service_url, timeout=10)
@@ -74,7 +80,6 @@ async def _heartbeat_pinger():
 # ==============================================================================
 # SECTION 1 & 2: PROXY & HUNTING LOGIC (No Changes)
 # ==============================================================================
-# (هذه الأجزاء لم تتغير عن الإصدار 5.0 - تبقى كما هي)
 def _proxy_checker(q_in, q_out):
     while True:
         proxy = q_in.get()
@@ -178,7 +183,7 @@ async def send_hit_notification(status, username, password, bot_token):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 **Welcome to the Ultimate Hunter Bot v5.2!**\n\n"
+        "👋 **Welcome to the Ultimate Hunter Bot v5.3!**\n\n"
         "▶️ `/hunt` - To start a new hunt.\n"
         "🛑 `/stophunt` - To stop the current hunt.\n"
         "📊 `/status` - Get a live progress report."
@@ -190,7 +195,9 @@ async def hunt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     keyboard = []
     row = []
-    for name, (code, length) in SUPPORTED_COUNTRIES.items():
+    # Sort countries by name for better presentation
+    sorted_countries = sorted(SUPPORTED_COUNTRIES.items())
+    for name, (code, length) in sorted_countries:
         row.append(InlineKeyboardButton(name, callback_data=f"hunt_{code}_{length}"))
         if len(row) == 2:
             keyboard.append(row)
@@ -236,7 +243,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await application.bot.send_message(
         chat_id=ADMIN_USER_ID,
-        text="✅ **Bot Online & Ready! (v5.2 Anti-Sleep)**\n\n"
+        text="✅ **Bot Online & Ready! (v5.3 Anti-Sleep)**\n\n"
              "🏭 Proxy harvester is active.\n"
              "❤️ Fast heartbeat is active (40s interval).\n\n"
              "Use `/hunt` to start."
@@ -245,12 +252,12 @@ async def post_init(application: Application):
     asyncio.create_task(_heartbeat_pinger())
 
 def main():
-    print("--- ULTIMATE HUNTER BOT v5.2 is starting... ---")
+    print("--- ULTIMATE HUNTER BOT v5.3 is starting... ---")
     threading.Thread(target=_start_heartbeat_server, daemon=True).start()
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
     application.add_handler(CommandHandler("start", start_command, filters=AdminFilter()))
-    application.add_handler(CommandHandler("hunt", hunt_command, filters=AdminFilter()))
+    application.add_handler(CommandHandler("hunt", hunt_command, filters=Admin-Filter()))
     application.add_handler(CommandHandler("stophunt", stophunt_command, filters=AdminFilter()))
     application.add_handler(CommandHandler("status", status_command, filters=AdminFilter()))
     application.add_handler(CallbackQueryHandler(button_handler))
